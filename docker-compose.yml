@@ -18,7 +18,6 @@ networks:
 
 volumes:
   opensearch-data1:
-  prometheus_data:
 services:
   # ******************
   # Core Demo Services
@@ -362,10 +361,6 @@ services:
         condition: service_started
       load-generator:
         condition: service_started
-      jaeger:
-        condition: service_started
-      grafana:
-        condition: service_started
       flagd-ui:
         condition: service_started
     dns_search: ""
@@ -693,56 +688,7 @@ services:
   # ********************
   # Telemetry Components
   # ********************
-  jaeger:
-    image: ${JAEGERTRACING_IMAGE}
-    container_name: jaeger
-    command:
-      - "--query.base-path=/jaeger/ui"
-      - "--prometheus.server-url=http://${PROMETHEUS_ADDR}"
-      - "--prometheus.query.normalize-calls=true"
-      - "--prometheus.query.normalize-duration=true"
-      - "--es.server-urls=https://${OPENSEARCH_HOST}:${OPENSEARCH_PORT}"
-      - "--es.tls.enabled=true"
-    deploy:
-      resources:
-        limits:
-          memory: 1200M
-    restart: unless-stopped
-    ports:
-      - "${JAEGER_PORT}" # Jaeger UI
-      - "${OTEL_COLLECTOR_PORT_GRPC}"
-    environment:
-      - OPENSEARCH_HOST=${OPENSEARCH_HOST}
-      - OPENSEARCH_PORT=${OPENSEARCH_PORT}
-      - METRICS_STORAGE_TYPE=prometheus
-      - COLLECTOR_OTLP_ENABLED=true
-      - SPAN_STORAGE_TYPE=opensearch
-      - ES_TAGS_AS_FIELDS_ALL=true
-      - ES_USERNAME=${OPENSEARCH_USER}
-      - ES_PASSWORD=${OPENSEARCH_PASSWORD}
-      - ES_TLS_SKIP_HOST_VERIFY=true
-    depends_on:
-      - opensearch-dashboards
-    logging: *logging
-
-  # Grafana
-  grafana:
-    image: ${GRAFANA_IMAGE}
-    container_name: grafana
-    deploy:
-      resources:
-        limits:
-          memory: 120M
-    restart: unless-stopped
-    environment:
-      - "GF_INSTALL_PLUGINS=grafana-opensearch-datasource"
-    volumes:
-      - ./src/grafana/grafana.ini:/etc/grafana/grafana.ini
-      - ./src/grafana/provisioning/:/etc/grafana/provisioning/
-    ports:
-      - "${GRAFANA_PORT}"
-    logging: *logging
-
+  
   # OpenTelemetry Collector
   otel-collector:
     image: ${COLLECTOR_CONTRIB_IMAGE}
@@ -767,9 +713,7 @@ services:
       - "${OTEL_COLLECTOR_PORT_GRPC}"
       - "${OTEL_COLLECTOR_PORT_HTTP}"
     depends_on:
-      jaeger:
-        condition: service_started
-      opensearch:
+      opensearch-otel:
         condition: service_healthy
     logging: *logging
     environment:
@@ -780,36 +724,10 @@ services:
       - OTEL_COLLECTOR_PORT_HTTP
       - GOMEMLIMIT=160MiB
 
-  # Prometheus
-  prometheus:
-    image: ${PROMETHEUS_IMAGE}
-    container_name: prometheus
-    command:
-      - --web.console.templates=/etc/prometheus/consoles
-      - --web.console.libraries=/etc/prometheus/console_libraries
-      - --storage.tsdb.retention.time=1h
-      - --config.file=/etc/prometheus/prometheus-config.yaml
-      - --storage.tsdb.path=/prometheus
-      - --web.enable-lifecycle
-      - --web.route-prefix=/
-      - --web.enable-otlp-receiver
-      - --enable-feature=exemplar-storage
-    volumes:
-      - prometheus_data:/usr/share/prometheus/data
-      - ./src/prometheus/prometheus-config.yaml:/etc/prometheus/prometheus-config.yaml
-    deploy:
-      resources:
-        limits:
-          memory: 300M
-    restart: unless-stopped
-    ports:
-      - "${PROMETHEUS_PORT}:${PROMETHEUS_PORT}"
-    logging: *logging
-
   # OpenSearch
-  opensearch:
+  opensearch-otel:
     image: ${OPENSEARCH_IMAGE}
-    container_name: opensearch
+    container_name: opensearch-otel
     deploy:
       resources:
         limits:
@@ -850,9 +768,9 @@ services:
   #################################################################################################
 
   # OpenSearch Dashboards
-  opensearch-dashboards:
+  opensearch-dashboards-otel:
     image: ${OPENSEARCH_DASHBOARDS_IMAGE}
-    container_name: opensearch-dashboards
+    container_name: opensearch-dashboards-otel
     ports:
       - ${OPENSEARCH_DASHBOARD_PORT}:${OPENSEARCH_DASHBOARD_PORT}
     environment:
@@ -861,13 +779,13 @@ services:
       - OPENSEARCH_USER=${OPENSEARCH_USER}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
     depends_on:
-      - opensearch
+      - opensearch-otel
     volumes:
       - ./src/dashboards/config/opensearch_dashboards.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
 
   # OpenSearch Ingestion - Data prepper
   data-prepper:
-    platform: linux/amd64
+    # platform: linux/amd64
     image: ${DATA_PREPPER_IMAGE}
     container_name: dataprepper
     environment:
@@ -892,7 +810,7 @@ services:
       - ${DP_OTEL_LOGS_SOURCE_PORT}
     logging: *logging
     depends_on:
-      opensearch:
+      opensearch-otel:
         condition: service_healthy
-      opensearch-dashboards:
+      opensearch-dashboards-otel:
         condition: service_started
